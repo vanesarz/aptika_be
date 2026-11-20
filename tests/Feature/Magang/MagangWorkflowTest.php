@@ -201,6 +201,8 @@ class MagangWorkflowTest extends TestCase
         ])->assertUnprocessable()->assertJsonValidationErrors(['cv_magang', 'portofolio']);
         $this->postJson('/api/magang', $data)->assertCreated()->assertJsonPath('data.sertifikat', 'Belum menerima')->assertJsonPath('data.foto_url', null);
         $this->assertDatabaseHas('magangs', ['nim' => '123', 'status_seleksi' => 'menunggu']);
+        $this->postJson('/api/magang', [...$data, 'email' => 'bukan-email'])
+            ->assertUnprocessable()->assertJsonValidationErrors(['username', 'email']);
         $data['tgl_selesai_magang'] = '2026-10-01';
         $this->postJson('/api/magang', $data)->assertUnprocessable()->assertJsonValidationErrors('tgl_selesai_magang');
     }

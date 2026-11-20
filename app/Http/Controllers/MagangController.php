@@ -93,7 +93,15 @@ class MagangController extends Controller
             ...$documentRules,
             'pas_foto' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
             'foto_latar' => 'nullable|in:merah,biru',
-            'username' => ['required', 'string', 'min:3', 'max:64', 'regex:/^[a-z0-9][a-z0-9._-]*$/'],
+            'username' => [
+                'bail', 'required', 'string', 'min:3', 'max:64', 'regex:/^[a-z0-9][a-z0-9._-]*$/',
+                function (string $attribute, string $username, \Closure $fail): void {
+                    $email = $username.'@magang.com';
+                    if (User::where('email', $email)->exists() || Magang::withoutGlobalScopes()->where('email_login', $email)->exists()) {
+                        $fail('Nama akun magang sudah digunakan. Pilih nama lain.');
+                    }
+                },
+            ],
             'nim' => 'required|string|max:100',
             'jurusan' => 'required|string|max:255',
             'email' => 'required|email|max:255',
@@ -116,7 +124,6 @@ class MagangController extends Controller
         ]);
 
         $loginEmail = $validated['username'].'@magang.com';
-        abort_if(User::where('email', $loginEmail)->exists() || Magang::withoutGlobalScopes()->where('email_login', $loginEmail)->exists(), 422, 'Nama akun magang sudah digunakan. Pilih nama lain.');
         unset($validated['username']);
         $attachments = [];
         foreach (config('magang.dokumen_pendaftaran') as $key => $spec) {

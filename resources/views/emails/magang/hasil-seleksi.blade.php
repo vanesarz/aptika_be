@@ -26,9 +26,11 @@
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;">
                     <tr><td style="padding:16px 18px;color:#1e293b;font-size:14px;line-height:1.55;">
                         <h2 style="margin:0 0 10px;color:#1e3a8a;font-size:16px;">Akun APTIKA Tools</h2>
-                        <p style="margin:0;"><strong>Email login</strong><br>{{ $emailLogin }}</p>
+                        <p style="margin:0 0 4px;font-size:12px;font-weight:bold;">Email login</p>
+                        <p style="margin:0;padding:9px 11px;background-color:#ffffff;border:1px solid #dbeafe;border-radius:8px;font-family:monospace;word-break:break-all;user-select:all;">{{ $emailLogin }}</p>
                         @if ($passwordAwal)
-                            <p style="margin:10px 0 0;"><strong>Password awal</strong><br><span style="font-family:monospace;word-break:break-all;">{{ $passwordAwal }}</span></p>
+                            <p style="margin:12px 0 4px;font-size:12px;font-weight:bold;">Password awal</p>
+                            <p style="margin:0;padding:9px 11px;background-color:#ffffff;border:1px solid #dbeafe;border-radius:8px;font-family:monospace;word-break:break-all;user-select:all;">{{ $passwordAwal }}</p>
                             <p style="margin:10px 0 0;color:#475569;font-size:13px;">Silakan ganti password setelah masuk.</p>
                         @else
                             <p style="margin:10px 0 0;color:#475569;font-size:13px;">Gunakan password akun Anda saat ini. Jika tidak bisa masuk, hubungi pengelola magang.</p>
