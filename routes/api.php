@@ -180,8 +180,8 @@ Route::get('/services', function () {
 });
 
 // Pendaftaran Magang Publik & File Serving
+Route::get('/magang/pendaftaran-info', [MagangController::class, 'pendaftaranInfo']);
 Route::post('/magang', [MagangController::class, 'store']);
-Route::post('/magang/{id}/upload-nda', [MagangController::class, 'uploadNda']);
 Route::get('/storage/{path}', [MagangController::class, 'serveFile'])
     ->where('path', '.*');
 
@@ -192,7 +192,7 @@ Route::get('/storage/{path}', [MagangController::class, 'serveFile'])
 // =====================================================                ]);
 
 
-Route::middleware(['auth:sanctum', 'active'])->group(function () {
+Route::middleware(['auth:sanctum', 'active', 'magang.access'])->group(function () {
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy']);
 
@@ -250,7 +250,7 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
                     'parent_id' => $service->parent_id,
                     'code' => $service->code,
                     'name' => $service->name,
-                    'is_enabled' => $isEnabled,
+                    'is_enabled' => $isEnabled && (!request()->user()->is_magang || in_array($service->code, ['MAGANG', 'MANAJEMEN_TUGAS'], true)),
                 ];
             }
         );
@@ -266,6 +266,7 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
                 'phone' => $user->phone,
                 'avatar_url' => $user->avatar_url,
                 'role' => $user->role,
+                'is_magang' => (bool) $user->is_magang,
             ],
 
             'bidang' => $user->bidang
@@ -1403,6 +1404,21 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
                 'magang/{id}/upload-nda',
                 [MagangController::class, 'uploadNda']
             );
+
+            Route::get('magang/{id}/foto', [MagangController::class, 'foto']);
+            Route::get('magang/{id}/lampiran/{jenis}', [MagangController::class, 'lampiran']);
+            Route::get('magang/options', [MagangController::class, 'options']);
+            Route::post('magang/{id}/pemberitahuan-penolakan', [MagangController::class, 'kirimUlangPenolakan']);
+            Route::post('magang/{id}/pemberitahuan-penerimaan', [MagangController::class, 'kirimUlangPenerimaan']);
+            Route::post('magang/{id}/kebutuhan-kampus', [MagangController::class, 'kebutuhanKampus']);
+            Route::patch('magang/{id}/kampus', [MagangController::class, 'aturKampus']);
+            Route::patch('magang/{id}/pengingat', [MagangController::class, 'aturPengingat']);
+            Route::post('magang/{id}/akun', [MagangController::class, 'aktivasiAkun']);
+            Route::post('magang/{id}/dokumen', [MagangController::class, 'dokumen']);
+            Route::patch('magang/{id}/seleksi', [MagangController::class, 'seleksi']);
+            Route::post('magang/{id}/validasi-nda', [MagangController::class, 'validasiNda']);
+            Route::post('magang/{id}/penilaian', [MagangController::class, 'penilaian']);
+            Route::post('magang/{id}/pengesahan', [MagangController::class, 'pengesahan']);
 
             Route::apiResource(
                 'magang',

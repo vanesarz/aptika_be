@@ -26,6 +26,7 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         $middleware->alias([
+            'magang.access' => \App\Http\Middleware\RestrictMagangAccount::class,
             'active'       => \App\Http\Middleware\CheckActiveUser::class,
             'role'         => \App\Http\Middleware\CheckRole::class,
             'admin.aptika' => \App\Http\Middleware\EnsureAdminAptika::class,
