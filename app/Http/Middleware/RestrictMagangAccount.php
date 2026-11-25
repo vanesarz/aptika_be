@@ -16,13 +16,12 @@ class RestrictMagangAccount
         $allowed = $request->is('api/me', 'api/user', 'api/logout', 'api/profile', 'api/password',
             'api/magang', 'api/magang/*', 'api/task-management/*');
         abort_unless($allowed, 403, 'Akun magang hanya dapat mengakses Magang dan Manajemen Tugas Digital.');
-        // Participant accounts may read their own internship and upload their signed NDA.
-        // Staff-only commands, including screening/grades/approval, remain unavailable.
         if ($request->is('api/magang', 'api/magang/*')) {
             abort_if($request->is('api/magang/options'), 403);
             $read = $request->isMethod('get') && ! $request->is('api/magang/pendaftaran-info');
-            $nda = $request->isMethod('post') && $request->is('api/magang/*/upload-nda');
-            abort_unless($read || $nda, 403, 'Tindakan ini hanya untuk pengelola magang.');
+            $write = $request->isMethod('post') && $request->is('api/magang/*/upload-nda', 'api/magang/*/kebutuhan-kampus');
+            $campusRequirement = $request->isMethod('patch') && $request->is('api/magang/*/kampus');
+            abort_unless($read || $write || $campusRequirement, 403, 'Tindakan ini hanya untuk pengelola magang.');
         }
 
         if ($request->is('api/task-management/boards/*') || $request->filled('board_id')) {

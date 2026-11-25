@@ -70,12 +70,19 @@ class MagangWorkflowTest extends TestCase
         ], $overrides));
     }
 
-    private function grades(): array
+    private function rubric(): array
     {
-        return ['format_penilaian' => 'Format kampus peserta', 'penilaian' => [
-            ['aspek' => 'Analisis proses bisnis', 'nilai' => 'A', 'skala' => 'A–E'],
-            ['aspek' => 'Komunikasi', 'nilai' => 'Baik', 'skala' => 'Predikat'],
-        ], 'kampus_perlu_input' => true, 'kampus_sudah_input' => false];
+        return [
+            ['aspek' => 'Analisis proses bisnis', 'skala' => 'A–E'],
+            ['aspek' => 'Komunikasi', 'skala' => 'Predikat'],
+        ];
+    }
+
+    private function grades(Magang $participant, array $scores = ['A', 'Baik']): array
+    {
+        $version = $this->getJson('/api/magang/'.$participant->id)->assertOk()->json('data.versi_rubrik_penilaian');
+
+        return ['versi_rubrik_penilaian' => $version ?? str_repeat('0', 64), 'nilai' => $scores];
     }
 
     public function test_admin_user_list_exposes_intern_category_including_inactive_accounts_with_bidang_scope(): void
@@ -168,18 +175,113 @@ class MagangWorkflowTest extends TestCase
         $this->assertStringContainsString('Gunakan password akun Anda saat ini', $messages[2]['text']);
     }
 
-    public function test_campus_guidance_accepts_private_document_link_and_instructions(): void
+    public function test_participant_submits_campus_guidance_and_rubric_then_only_assigned_mentor_can_grade(): void
     {
+        $mentor = $this->staff();
+        $intern = User::factory()->create(['bidang_id' => $mentor->bidang_id, 'is_magang' => true, 'is_active' => 1]);
+        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id, 'user_id' => $intern->id]);
+        $other = $this->applicant(['status_seleksi' => 'diterima']);
+        $base = '/api/magang/'.$p->id;
+        $guide = ['link' => 'https://kampus.example/penilaian', 'panduan' => 'Gunakan skala A–E.'];
+        $rubric = [
+            ['aspek' => 'Komunikasi', 'nilai_min' => 1, 'nilai_maks' => 5, 'bobot' => 50],
+            ['aspek' => 'Ketepatan waktu', 'nilai_min' => 1, 'nilai_maks' => 5, 'bobot' => 50],
+        ];
+
+        $this->postJson($base.'/kebutuhan-kampus', [...$guide, 'kampus_perlu_input' => true])->assertForbidden();
+        $this->postJson($base.'/penilaian', $this->grades($p))->assertUnprocessable();
+        $this->actingAs($intern, 'sanctum');
+        $this->postJson('/api/magang/'.$other->id.'/kebutuhan-kampus', $guide)->assertNotFound();
+        $this->postJson($base.'/kebutuhan-kampus', $guide)->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['dokumen' => UploadedFile::fake()->create('panduan.pdf', 20, 'application/pdf')])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['link' => 'javascript:alert(1)'])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['kampus_perlu_input' => true, 'dokumen' => UploadedFile::fake()->create('panduan.docx', 20)])
+            ->assertUnprocessable()->assertJsonValidationErrors('dokumen');
+        $this->assertFalse($p->fresh()->kampus_perlu_input);
+        $this->post($base.'/kebutuhan-kampus', [
+            ...$guide, 'kampus_perlu_input' => '1', 'dokumen' => UploadedFile::fake()->create('panduan.pdf', 20, 'application/pdf'),
+        ], ['Accept' => 'application/json'])->assertOk()
+            ->assertJsonPath('data.kampus_perlu_input', true)
+            ->assertJsonPath('data.kebutuhan_kampus.panduan', $guide['panduan']);
+        $previousGuide = $p->fresh()->lampiran_pendaftaran['pedoman_kampus']['path'];
+        Storage::disk('local')->assertExists($previousGuide);
+
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => [$rubric[0], [...$rubric[1], 'bobot' => 51]]])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => [$rubric[0], [...$rubric[1], 'bobot' => 49.99]]])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => [
+            [...$rubric[0], 'bobot' => 100],
+            ['aspek' => 'Ketepatan waktu', 'nilai_min' => 1, 'nilai_maks' => 5],
+        ]])->assertUnprocessable()->assertJsonValidationErrors('aspek_penilaian.1.bobot');
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => [$rubric[0], [...$rubric[1], 'aspek' => 'KOMUNIKASI']]])
+            ->assertUnprocessable()->assertJsonValidationErrors('aspek_penilaian.1.aspek');
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => $rubric])
+            ->assertOk()->assertJsonPath('data.rubrik_penilaian', $rubric);
+        $stale = $this->grades($p, ['4', '5']);
+        $rubric[0]['bobot'] = 55;
+        $rubric[1]['bobot'] = 45;
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => $rubric])->assertOk();
+        $scores = $this->grades($p, ['4', '5']);
+        $this->postJson($base.'/penilaian', $scores)->assertForbidden();
+
         $this->staff();
-        $p = $this->applicant();
-        $this->postJson('/api/magang/'.$p->id.'/kebutuhan-kampus', [
-            'link' => 'https://kampus.example/penilaian', 'panduan' => 'Gunakan skala A–E.',
-            'dokumen' => UploadedFile::fake()->create('panduan.pdf', 20, 'application/pdf'),
-        ])->assertOk()->assertJsonPath('data.kebutuhan_kampus.panduan', 'Gunakan skala A–E.');
-        $file = $p->fresh()->lampiran_pendaftaran['pedoman_kampus'];
-        Storage::disk('local')->assertExists($file['path']);
-        $this->get('/api/magang/'.$p->id.'/lampiran/pedoman_kampus')->assertOk();
-        $this->postJson('/api/magang/'.$p->id.'/kebutuhan-kampus', ['link' => 'javascript:alert(1)'])->assertUnprocessable();
+        $this->getJson($base)->assertOk()->assertJsonPath('data.kebutuhan_kampus', null)->assertJsonCount(0, 'data.lampiran_pendaftaran');
+        $this->get($base.'/lampiran/pedoman_kampus')->assertForbidden();
+        $this->postJson($base.'/penilaian', $scores)->assertForbidden();
+
+        $this->actingAs($mentor, 'sanctum');
+        $this->getJson($base)->assertOk()->assertJsonPath('data.kebutuhan_kampus.link', $guide['link']);
+        $this->get($base.'/lampiran/pedoman_kampus')->assertDownload('panduan.pdf');
+        $this->postJson($base.'/penilaian', $stale)->assertConflict();
+        $this->postJson($base.'/penilaian', [...$scores, 'nilai' => ['A']])->assertUnprocessable();
+        $this->postJson($base.'/penilaian', [...$scores, 'metode_bobot' => 'berbeda', 'aspek_penilaian' => $rubric])->assertUnprocessable();
+        $this->patchJson($base.'/kampus', ['kampus_perlu_input' => true, 'kampus_sudah_input' => true])
+            ->assertUnprocessable()->assertJsonValidationErrors('kampus_perlu_input');
+        $this->postJson($base.'/penilaian', $scores)->assertOk()
+            ->assertJsonPath('data.penilaian.0.nilai', '4')
+            ->assertJsonPath('data.penilaian.1.bobot', 45)
+            ->assertJsonPath('data.penilaian.1.nilai_terbobot', 2.25)
+            ->assertJsonPath('data.ringkasan_nilai.total_bobot', 100)
+            ->assertJsonPath('data.ringkasan_nilai.total_terbobot', 4.45);
+
+        $this->actingAs($intern, 'sanctum');
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => $rubric])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['dokumen' => UploadedFile::fake()->create('revisi.pdf', 20, 'application/pdf')])->assertOk();
+        Storage::disk('local')->assertMissing($previousGuide);
+        $this->getJson($base)->assertOk()->assertJsonPath('data.rubrik_penilaian', $rubric)->assertJsonPath('data.penilaian.0.nilai', '4');
+        $this->postJson($base.'/kebutuhan-kampus', ['kampus_perlu_input' => '0'])->assertOk()
+            ->assertJsonPath('data.kampus_perlu_input', false);
+        $this->postJson($base.'/kebutuhan-kampus', ['link' => null])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['kampus_perlu_input' => true])->assertOk()
+            ->assertJsonPath('data.kebutuhan_kampus.link', $guide['link']);
+    }
+
+    public function test_equal_weights_average_numeric_scores_and_enforce_each_aspect_range(): void
+    {
+        $mentor = $this->staff();
+        $intern = User::factory()->create(['bidang_id' => $mentor->bidang_id, 'is_magang' => true, 'is_active' => 1]);
+        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id, 'user_id' => $intern->id]);
+        $base = '/api/magang/'.$p->id;
+        $rubric = [
+            ['aspek' => 'Komunikasi', 'nilai_min' => 1, 'nilai_maks' => 5],
+            ['aspek' => 'Ketepatan waktu', 'nilai_min' => 0, 'nilai_maks' => 5],
+        ];
+
+        $this->actingAs($intern, 'sanctum');
+        $this->postJson($base.'/kebutuhan-kampus', ['aspek_penilaian' => $rubric])
+            ->assertUnprocessable()->assertJsonValidationErrors('metode_bobot');
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'sama', 'aspek_penilaian' => [
+            [...$rubric[0], 'nilai_min' => 5], $rubric[1],
+        ]])->assertUnprocessable();
+        $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'sama', 'aspek_penilaian' => $rubric])
+            ->assertOk()->assertJsonPath('data.metode_bobot', 'sama');
+
+        $this->actingAs($mentor, 'sanctum');
+        foreach ([['0', '5'], ['1', '5.01'], ['A', '5']] as $scores) {
+            $this->postJson($base.'/penilaian', $this->grades($p, $scores))->assertUnprocessable();
+        }
+        $this->postJson($base.'/penilaian', $this->grades($p, ['5', '0']))
+            ->assertOk()->assertJsonPath('data.ringkasan_nilai.rata_rata', 2.5)
+            ->assertJsonPath('data.penilaian.1.nilai_min', 0);
     }
 
     public function test_public_registration_requires_identity_and_cannot_self_approve(): void
@@ -211,25 +313,25 @@ class MagangWorkflowTest extends TestCase
     {
         config(['magang.nda_wajib_sebelum_penilaian' => true]);
         $mentor = $this->staff();
-        $p = $this->applicant();
+        $p = $this->applicant(['kebutuhan_kampus' => ['aspek_penilaian' => $this->rubric()]]);
         $base = '/api/magang/'.$p->id;
-        $this->postJson($base.'/penilaian', $this->grades())->assertUnprocessable();
+        $this->postJson($base.'/penilaian', $this->grades($p))->assertForbidden();
         $this->patchJson($base.'/seleksi', ['status_seleksi' => 'diterima', 'jurusan_sesuai' => true])->assertOk()->assertJsonPath('data.mentor_id', $mentor->id);
         $this->assertNotNull($p->fresh()->nomor_nda);
         $this->patchJson($base.'/seleksi', ['status_seleksi' => 'ditolak'])->assertUnprocessable();
         $this->putJson($base, ['nama' => 'Changed'])->assertUnprocessable();
         $this->postJson($base.'/validasi-nda')->assertUnprocessable();
         $this->postJson($base.'/upload-nda', ['nda_file' => UploadedFile::fake()->create('nda.pdf', 50, 'application/pdf')])->assertOk();
-        $this->postJson($base.'/penilaian', $this->grades())->assertUnprocessable();
+        $this->postJson($base.'/penilaian', $this->grades($p))->assertUnprocessable();
         $this->postJson($base.'/validasi-nda')->assertOk();
         $this->postJson($base.'/penilaian', ['format_penilaian' => 'Contoh', 'penilaian' => [['nilai' => 'A']], 'kampus_perlu_input' => false, 'kampus_sudah_input' => false])->assertUnprocessable();
-        $this->postJson($base.'/penilaian', $this->grades())->assertOk();
+        $this->postJson($base.'/penilaian', $this->grades($p))->assertOk();
         $this->postJson($base.'/pengesahan')->assertForbidden();
         $this->staff('TEST', 'admin');
         $this->postJson($base.'/pengesahan', ['nomor_sertifikat' => 'RESMI/001/2026',
             'sertifikat_file' => UploadedFile::fake()->create('sertifikat.pdf', 50, 'application/pdf')])
             ->assertOk()->assertJsonPath('data.sertifikat', 'Sudah menerima');
-        $this->postJson($base.'/penilaian', $this->grades())->assertUnprocessable();
+        $this->postJson($base.'/penilaian', $this->grades($p))->assertUnprocessable();
         $this->postJson($base.'/upload-nda', ['nda_file' => UploadedFile::fake()->create('nda.pdf', 50, 'application/pdf')])->assertUnprocessable();
         $this->getJson('/api/magang')->assertOk()->assertJsonPath('data.0.nomor_sertifikat', 'RESMI/001/2026');
     }
@@ -256,7 +358,7 @@ class MagangWorkflowTest extends TestCase
         $mentor = $this->staff();
         $p = $this->applicant(['tgl_selesai_magang' => '2026-12-01', 'status_seleksi' => 'diterima',
             'mentor_id' => $mentor->id, 'nda_file' => 'nda-file/nda.pdf', 'nda_validated_at' => now()]);
-        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades())->assertUnprocessable();
+        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades($p))->assertUnprocessable();
         auth('sanctum')->forgetUser();
         auth()->forgetGuards();
         $this->postJson('/api/magang/'.$p->id.'/upload-nda')->assertUnauthorized();
@@ -274,7 +376,7 @@ class MagangWorkflowTest extends TestCase
             'nda_file' => UploadedFile::fake()->create('new.pdf', 50, 'application/pdf'),
         ])->assertOk();
         $this->assertNull($p->fresh()->nda_validated_at);
-        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades())->assertUnprocessable();
+        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades($p))->assertUnprocessable();
     }
 
     public function test_quota_uses_concurrent_peak_and_not_sum_of_all_overlapping_applicants(): void
@@ -290,14 +392,15 @@ class MagangWorkflowTest extends TestCase
     public function test_flexible_assessment_does_not_impose_four_aspects_or_mandatory_nda_by_default(): void
     {
         $mentor = $this->staff();
-        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id]);
-        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades())->assertOk();
+        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id,
+            'kebutuhan_kampus' => ['aspek_penilaian' => $this->rubric()]]);
+        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades($p))->assertOk();
         $this->getJson('/api/magang/'.$p->id)->assertOk()
             ->assertJsonPath('data.penilaian.0.aspek', 'Analisis proses bisnis')
             ->assertJsonPath('data.penilaian.0.nilai', 'A')
             ->assertJsonPath('data.format_penilaian', 'Format kampus peserta');
-        $data = $this->grades();
-        $data['penilaian'][1]['aspek'] = 'ANALISIS PROSES BISNIS';
+        $data = $this->grades($p);
+        $data['penilaian'] = [['aspek' => 'Aspek di luar rubrik', 'nilai' => 'A']];
         $this->postJson('/api/magang/'.$p->id.'/penilaian', $data)->assertUnprocessable();
         $legacy = $this->applicant(['penilaian' => ['teknis' => 87]]);
         $this->getJson('/api/magang/'.$legacy->id)->assertOk()->assertJsonPath('data.penilaian.0.nilai', '87');
@@ -360,20 +463,52 @@ class MagangWorkflowTest extends TestCase
     {
         $mentor = $this->staff();
         $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id,
-            'tgl_selesai_magang' => '2026-11-24']);
+            'tgl_selesai_magang' => '2026-11-24', 'kebutuhan_kampus' => ['aspek_penilaian' => $this->rubric()]]);
         $base = '/api/magang/'.$p->id;
         $this->getJson($base)->assertOk()->assertJsonPath('data.pengingat_hari', [14, 7]);
         $this->assertStringContainsString('H-14', $this->getJson($base)->json('data.pengingat'));
         $this->patchJson($base.'/pengingat', ['pengingat_hari' => [3, 2]])->assertOk()->assertJsonPath('data.pengingat', null);
         $this->patchJson($base.'/pengingat', ['pengingat_hari' => [3, 3]])->assertUnprocessable();
         $this->travelTo(now('Asia/Jakarta')->setDate(2026, 11, 24));
-        $this->postJson($base.'/penilaian', $this->grades())->assertOk();
+        $this->postJson($base.'/penilaian', $this->grades($p))->assertOk();
         $message = $this->getJson($base)->json('data.pengingat');
         $this->assertStringContainsString('sertifikat', $message);
         $this->assertStringContainsString('surat selesai', $message);
-        $p->refresh()->update(['disahkan_at' => now()]);
-        $this->patchJson($base.'/kampus', ['kampus_perlu_input' => true, 'kampus_sudah_input' => true])->assertOk();
-        $this->assertTrue($p->fresh()->kampus_sudah_input);
+    }
+
+    public function test_only_participant_sets_campus_requirements_and_assigned_mentor_confirms_completion(): void
+    {
+        $mentor = $this->staff();
+        $intern = User::factory()->create(['bidang_id' => $mentor->bidang_id, 'is_magang' => true, 'is_active' => 1]);
+        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id, 'user_id' => $intern->id]);
+        $other = $this->applicant(['status_seleksi' => 'diterima']);
+        $base = '/api/magang/'.$p->id;
+        $statusUrl = $base.'/kampus';
+        $require = ['kampus_perlu_input' => true];
+        $complete = ['kampus_sudah_input' => true];
+
+        $this->patchJson($statusUrl, $complete)->assertUnprocessable();
+        $this->actingAs($intern, 'sanctum');
+        $this->patchJson('/api/magang/'.$other->id.'/kampus', $require)->assertNotFound();
+        $this->patchJson($statusUrl, [...$require, ...$complete])->assertUnprocessable()->assertJsonValidationErrors('kampus_sudah_input');
+        $this->patchJson($statusUrl, $require)->assertOk()->assertJsonPath('data.kampus_perlu_input', true)->assertJsonPath('data.kampus_sudah_input', false);
+        $this->assertStringContainsString('input atau dokumen kampus', $this->getJson($base)->json('data.pengingat'));
+
+        $this->staff();
+        $this->patchJson($statusUrl, $complete)->assertForbidden();
+        $this->staff('TEST', 'admin');
+        $this->patchJson($statusUrl, $require)->assertForbidden();
+        $this->patchJson($statusUrl, $complete)->assertForbidden();
+
+        $this->actingAs($mentor, 'sanctum');
+        $this->patchJson($statusUrl, $require)->assertUnprocessable()->assertJsonValidationErrors('kampus_perlu_input');
+        $this->patchJson($statusUrl, $complete)->assertOk()->assertJsonPath('data.kampus_perlu_input', true)->assertJsonPath('data.kampus_sudah_input', true);
+        $this->assertStringNotContainsString('input atau dokumen kampus', $this->getJson($base)->json('data.pengingat'));
+
+        $this->actingAs($intern, 'sanctum');
+        $this->patchJson($statusUrl, $require)->assertOk()->assertJsonPath('data.kampus_sudah_input', true);
+        $this->patchJson($statusUrl, ['kampus_perlu_input' => false])->assertOk()->assertJsonPath('data.kampus_sudah_input', false);
+        $this->patchJson($statusUrl, $require)->assertOk()->assertJsonPath('data.kampus_sudah_input', false);
     }
 
     public function test_laptop_can_be_declared_truthfully_but_is_checked_when_accepting_an_aptika_applicant(): void
@@ -434,7 +569,7 @@ class MagangWorkflowTest extends TestCase
         $this->getJson('/api/magang/options')->assertForbidden();
         $this->getJson('/api/admin/users')->assertForbidden();
         $this->getJson('/api/smki/daftar-rekaman')->assertForbidden();
-        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades())->assertForbidden();
+        $this->postJson('/api/magang/'.$p->id.'/penilaian', $this->grades($p))->assertForbidden();
         $this->patchJson('/api/magang/'.$other->id.'/seleksi', ['status_seleksi' => 'diterima', 'jurusan_sesuai' => true])->assertForbidden();
         $this->postJson('/api/magang/'.$p->id.'/upload-nda', ['nda_file' => UploadedFile::fake()->create('nda.pdf', 50, 'application/pdf')])->assertOk();
         $me = $this->getJson('/api/me')->assertOk()->assertJsonPath('user.is_magang', true);
@@ -462,16 +597,16 @@ class MagangWorkflowTest extends TestCase
     public function test_telkom_reference_keeps_45_percent_weight_and_computes_43_15_without_copying_scores(): void
     {
         $mentor = $this->staff();
-        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id]);
-        $scores = [94, 95, 97, 96, 97, 95, 95, 97];
-        $rows = array_map(fn ($r, $i) => [...$r, 'nilai' => (string) $scores[$i], 'skala' => '0–100'], config('magang.rubrik_telkom'), array_keys($scores));
-        $payload = ['format_penilaian' => 'Telkom University — Pembimbing Lapangan KPPM', 'penilaian' => $rows, 'kampus_perlu_input' => false, 'kampus_sudah_input' => false];
+        $rubric = array_map(fn ($row) => [...$row, 'skala' => '0–100'], config('magang.rubrik_telkom'));
+        $p = $this->applicant(['status_seleksi' => 'diterima', 'mentor_id' => $mentor->id,
+            'kebutuhan_kampus' => ['aspek_penilaian' => $rubric]]);
+        $payload = $this->grades($p, ['94', '95', '97', '96', '97', '95', '95', '97']);
         $this->postJson('/api/magang/'.$p->id.'/penilaian', $payload)->assertOk();
         $this->getJson('/api/magang/'.$p->id)->assertOk()->assertJsonPath('data.ringkasan_nilai.total_bobot', 45)->assertJsonPath('data.ringkasan_nilai.total_terbobot', 43.15);
         $preset = $this->getJson('/api/magang/options')->assertOk()->json('data.rubrik_telkom');
         $this->assertCount(8, $preset);
         $this->assertArrayNotHasKey('nilai', $preset[0]);
-        $payload['penilaian'][0]['nilai'] = '101';
+        $payload['nilai'][0] = '101';
         $this->postJson('/api/magang/'.$p->id.'/penilaian', $payload)->assertUnprocessable();
     }
 
