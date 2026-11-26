@@ -18,6 +18,7 @@ class Notification extends Model
         'read_at',
         'board_id',
         'task_id',
+        'magang_id',
         'created_by_user_id',
     ];
 
@@ -41,6 +42,12 @@ class Notification extends Model
     {
         return $this->belongsTo(Task::class)
             ->select(['id', 'title', 'status']);
+    }
+
+    public function magang()
+    {
+        return $this->belongsTo(Magang::class)
+            ->select(['id', 'nama']);
     }
 
     public function createdByUser()

@@ -4,10 +4,14 @@ namespace Tests\Feature\Magang;
 
 use App\Models\Bidang;
 use App\Models\Magang;
+use App\Models\Notification;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -43,6 +47,23 @@ class MagangWorkflowTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        if (! Schema::hasTable('notifications')) {
+            Schema::create('notifications', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('user_id');
+                $table->foreignId('board_id')->nullable();
+                $table->foreignId('task_id')->nullable();
+                $table->foreignId('magang_id')->nullable();
+                $table->string('type');
+                $table->string('title');
+                $table->text('message');
+                $table->boolean('is_read')->default(false);
+                $table->timestamp('read_at')->nullable();
+                $table->foreignId('created_by_user_id')->nullable();
+                $table->timestamps();
+                $table->index(['user_id', 'type', 'magang_id']);
+            });
+        }
         Storage::fake('public');
         Storage::fake('local');
         $this->travelTo(now('Asia/Jakarta')->setDate(2026, 11, 10)->startOfDay());
@@ -203,6 +224,18 @@ class MagangWorkflowTest extends TestCase
         ], ['Accept' => 'application/json'])->assertOk()
             ->assertJsonPath('data.kampus_perlu_input', true)
             ->assertJsonPath('data.kebutuhan_kampus.panduan', $guide['panduan']);
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $mentor->id,
+            'magang_id' => $p->id,
+            'type' => 'MAGANG_GUIDANCE_UPDATED',
+        ]);
+        $guidanceNotificationCount = Notification::where('user_id', $mentor->id)
+            ->where('magang_id', $p->id)
+            ->where('type', 'MAGANG_GUIDANCE_UPDATED')->count();
+        $this->postJson($base.'/kebutuhan-kampus', [...$guide, 'kampus_perlu_input' => true])->assertOk();
+        $this->assertSame($guidanceNotificationCount, Notification::where('user_id', $mentor->id)
+            ->where('magang_id', $p->id)
+            ->where('type', 'MAGANG_GUIDANCE_UPDATED')->count());
         $previousGuide = $p->fresh()->lampiran_pendaftaran['pedoman_kampus']['path'];
         Storage::disk('local')->assertExists($previousGuide);
 
@@ -242,8 +275,15 @@ class MagangWorkflowTest extends TestCase
             ->assertJsonPath('data.penilaian.1.nilai_terbobot', 2.25)
             ->assertJsonPath('data.ringkasan_nilai.total_bobot', 100)
             ->assertJsonPath('data.ringkasan_nilai.total_terbobot', 4.45);
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $intern->id,
+            'magang_id' => $p->id,
+            'type' => 'MAGANG_RATING_SUBMITTED',
+        ]);
 
         $this->actingAs($intern, 'sanctum');
+        $this->getJson('/api/notifications')->assertOk()
+            ->assertJsonPath('data.0.magang.id', $p->id);
         $this->postJson($base.'/kebutuhan-kampus', ['metode_bobot' => 'berbeda', 'aspek_penilaian' => $rubric])->assertUnprocessable();
         $this->postJson($base.'/kebutuhan-kampus', ['dokumen' => UploadedFile::fake()->create('revisi.pdf', 20, 'application/pdf')])->assertOk();
         Storage::disk('local')->assertMissing($previousGuide);
@@ -253,6 +293,10 @@ class MagangWorkflowTest extends TestCase
         $this->postJson($base.'/kebutuhan-kampus', ['link' => null])->assertUnprocessable();
         $this->postJson($base.'/kebutuhan-kampus', ['kampus_perlu_input' => true])->assertOk()
             ->assertJsonPath('data.kebutuhan_kampus.link', $guide['link']);
+        $replacementGuide = $p->fresh()->lampiran_pendaftaran['pedoman_kampus']['path'];
+        $this->postJson($base.'/kebutuhan-kampus', ['hapus_dokumen' => true])->assertOk()
+            ->assertJsonPath('data.lampiran_pendaftaran', []);
+        Storage::disk('local')->assertMissing($replacementGuide);
     }
 
     public function test_equal_weights_average_numeric_scores_and_enforce_each_aspect_range(): void
@@ -287,6 +331,8 @@ class MagangWorkflowTest extends TestCase
     public function test_public_registration_requires_identity_and_cannot_self_approve(): void
     {
         $bidang = Bidang::create(['code' => 'TEST', 'name' => 'TEST']);
+        $aptika = Bidang::firstOrCreate(['code' => 'APTIKA'], ['name' => 'APTIKA']);
+        $admin = User::factory()->create(['role' => 'admin', 'bidang_id' => $aptika->id, 'is_active' => 1]);
         $data = ['nama' => 'Peserta', 'nama_kampus' => 'Kampus', 'bidang_id' => $bidang->id,
             'tgl_mulai_magang' => '2026-11-01', 'tgl_selesai_magang' => '2026-12-01',
             'cv_magang' => UploadedFile::fake()->create('cv.pdf', 50, 'application/pdf')];
@@ -301,7 +347,13 @@ class MagangWorkflowTest extends TestCase
             'cv_magang' => UploadedFile::fake()->create('cv.pdf', 2049, 'application/pdf'),
             'portofolio' => UploadedFile::fake()->create('portofolio.pdf', 5121, 'application/pdf'),
         ])->assertUnprocessable()->assertJsonValidationErrors(['cv_magang', 'portofolio']);
-        $this->postJson('/api/magang', $data)->assertCreated()->assertJsonPath('data.sertifikat', 'Belum menerima')->assertJsonPath('data.foto_url', null);
+        $response = $this->postJson('/api/magang', $data)->assertCreated()
+            ->assertJsonPath('data.sertifikat', 'Belum menerima')->assertJsonPath('data.foto_url', null);
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $admin->id,
+            'magang_id' => $response->json('data.id'),
+            'type' => 'MAGANG_NEW_APPLICANT',
+        ]);
         $this->assertDatabaseHas('magangs', ['nim' => '123', 'status_seleksi' => 'menunggu']);
         $this->postJson('/api/magang', [...$data, 'email' => 'bukan-email'])
             ->assertUnprocessable()->assertJsonValidationErrors(['username', 'email']);
@@ -334,6 +386,36 @@ class MagangWorkflowTest extends TestCase
         $this->postJson($base.'/penilaian', $this->grades($p))->assertUnprocessable();
         $this->postJson($base.'/upload-nda', ['nda_file' => UploadedFile::fake()->create('nda.pdf', 50, 'application/pdf')])->assertUnprocessable();
         $this->getJson('/api/magang')->assertOk()->assertJsonPath('data.0.nomor_sertifikat', 'RESMI/001/2026');
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $p->fresh()->user_id,
+            'magang_id' => $p->id,
+            'type' => 'MAGANG_CERTIFICATE_FINALIZED',
+        ]);
+    }
+
+    public function test_rating_pending_notifications_are_sent_once_to_mentor_and_aptika_admin(): void
+    {
+        $mentor = $this->staff();
+        $aptika = Bidang::firstOrCreate(['code' => 'APTIKA'], ['name' => 'APTIKA']);
+        $admin = User::factory()->create(['role' => 'admin', 'bidang_id' => $aptika->id, 'is_active' => 1]);
+        $participant = $this->applicant([
+            'status_seleksi' => 'diterima',
+            'mentor_id' => $mentor->id,
+            'tgl_selesai_magang' => '2026-11-09',
+        ]);
+
+        Artisan::call('magang:notify-rating-pending');
+        Artisan::call('magang:notify-rating-pending');
+
+        $this->assertSame(1, Notification::where('user_id', $mentor->id)
+            ->where('magang_id', $participant->id)
+            ->where('type', 'MAGANG_RATING_PENDING')->count());
+        $this->assertSame(1, Notification::where('user_id', $admin->id)
+            ->where('magang_id', $participant->id)
+            ->where('type', 'MAGANG_RATING_PENDING')->count());
+        $this->actingAs($mentor, 'sanctum');
+        $this->getJson('/api/notifications')->assertOk()
+            ->assertJsonPath('data.0.magang.id', $participant->id);
     }
 
     public function test_approval_checks_peak_capacity_and_isolates_bidang_and_mentor(): void
@@ -415,6 +497,11 @@ class MagangWorkflowTest extends TestCase
         $p = $this->applicant(['jurusan' => 'Rekayasa Perangkat Lunak']);
         $this->patchJson('/api/magang/'.$p->id.'/seleksi', ['status_seleksi' => 'diterima', 'mentor_id' => $other->id, 'jurusan_sesuai' => true])
             ->assertOk()->assertJsonPath('data.mentor_id', $other->id);
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $other->id,
+            'magang_id' => $p->id,
+            'type' => 'MAGANG_MENTOR_ASSIGNED',
+        ]);
         $p = $this->applicant();
         $this->patchJson('/api/magang/'.$p->id.'/seleksi', ['status_seleksi' => 'diterima'])->assertUnprocessable()->assertJsonValidationErrors('jurusan_sesuai');
         $outsider = $this->staff('OTHER');

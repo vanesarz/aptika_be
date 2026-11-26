@@ -196,6 +196,12 @@ Route::middleware(['auth:sanctum', 'active', 'magang.access'])->group(function (
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy']);
 
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+    Route::patch('/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
+    Route::patch('/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
+    Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
+
     Route::get('/user', function (Request $request) {
         return $request->user();
     });

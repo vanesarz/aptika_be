@@ -26,6 +26,10 @@ class NotificationResource extends JsonResource
                 'title' => $this->task->title,
                 'status' => $this->task->status,
             ] : null,
+            'magang' => $this->whenLoaded('magang') ? [
+                'id' => $this->magang->id,
+                'nama' => $this->magang->nama,
+            ] : null,
             'created_by' => $this->whenLoaded('createdBy') ? [
                 'id' => $this->createdBy->id,
                 'name' => $this->createdBy->name,

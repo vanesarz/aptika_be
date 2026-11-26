@@ -14,7 +14,7 @@ class RestrictMagangAccount
             return $next($request);
         }
         $allowed = $request->is('api/me', 'api/user', 'api/logout', 'api/profile', 'api/password',
-            'api/magang', 'api/magang/*', 'api/task-management/*');
+            'api/magang', 'api/magang/*', 'api/notifications', 'api/notifications/*', 'api/task-management/*');
         abort_unless($allowed, 403, 'Akun magang hanya dapat mengakses Magang dan Manajemen Tugas Digital.');
         if ($request->is('api/magang', 'api/magang/*')) {
             abort_if($request->is('api/magang/options'), 403);

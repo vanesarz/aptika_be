@@ -3,17 +3,31 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
     <title>Hasil seleksi magang | APTIKA Tools</title>
+    <style>
+        :root { color-scheme: light dark; supported-color-schemes: light dark; }
+        .email-title { color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }
+        @media (prefers-color-scheme: dark) {
+            .email-title { color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }
+        }
+        [data-ogsc] .email-title { color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }
+        u + .body .gmail-blend-screen { background: #000000; mix-blend-mode: screen; }
+        u + .body .gmail-blend-difference { background: #000000; mix-blend-mode: difference; }
+    </style>
 </head>
-<body style="margin:0;padding:0;background-color:#f1f5f9;color:#1e293b;font-family:Arial,Helvetica,sans-serif;">
+<body class="body" style="margin:0;padding:0;background-color:#f1f5f9;color:#1e293b;font-family:Arial,Helvetica,sans-serif;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f1f5f9;">
 <tr><td align="center" style="padding:24px 12px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:16px;">
         <tr>
             <td bgcolor="#142656" style="padding:30px 28px;background-color:#142656;background-image:linear-gradient(125deg,#0f172a,#1e3a8a);border-radius:15px 15px 0 0;">
-                <p style="margin:0 0 10px;color:#bfdbfe;font-size:11px;font-weight:bold;letter-spacing:2px;">APTIKA TOOLS &middot; PROGRAM MAGANG</p>
-                <h1 style="margin:0;color:#ffffff;font-size:26px;line-height:1.25;">Hasil seleksi magang</h1>
-                <p style="margin:10px 0 0;color:#dbeafe;font-size:13px;">Pendaftaran #{{ $nomor }}</p>
+                <p style="margin:0 0 10px;color:#bfdbfe;font-size:11px;font-weight:bold;letter-spacing:2px;"><span class="gmail-blend-screen"><span class="gmail-blend-difference">APTIKA TOOLS &middot; PROGRAM MAGANG</span></span></p>
+                <h1 class="email-title" style="margin:0;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:26px;line-height:1.25;">
+                    <span class="gmail-blend-screen"><span class="gmail-blend-difference">Hasil seleksi magang</span></span>
+                </h1>
+                <p style="margin:10px 0 0;color:#dbeafe;font-size:13px;"><span class="gmail-blend-screen"><span class="gmail-blend-difference">Pendaftaran #{{ $nomor }}</span></span></p>
             </td>
         </tr>
         <tr><td style="padding:26px 28px 28px;font-size:14px;line-height:1.65;">

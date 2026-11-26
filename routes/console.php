@@ -4,6 +4,8 @@ use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schedule;
+use App\Models\Magang;
+use App\Services\TaskManagement\NotificationService;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -35,3 +37,24 @@ Artisan::command('smki:cleanup-fr009-exports', function () {
 })->purpose('Hapus direktori privat ekspor FR-009 yang sudah kedaluwarsa');
 
 Schedule::command('smki:cleanup-fr009-exports')->daily()->withoutOverlapping();
+
+Artisan::command('magang:notify-rating-pending', function (NotificationService $notifications) {
+    $participants = Magang::query()
+        ->with('mentor')
+        ->where('status_seleksi', 'diterima')
+        ->whereNotNull('mentor_id')
+        ->whereNull('dinilai_at')
+        ->whereDate('tgl_selesai_magang', '<=', now('Asia/Jakarta')->toDateString())
+        ->get();
+
+    foreach ($participants as $participant) {
+        $notifications->notifyMagangRatingPending($participant);
+    }
+
+    $this->info(sprintf('Pemeriksaan selesai magang: %d peserta diproses.', $participants->count()));
+})->purpose('Beri notifikasi penilaian untuk peserta yang periode magangnya berakhir');
+
+Schedule::command('magang:notify-rating-pending')
+    ->dailyAt('08:00')
+    ->timezone('Asia/Jakarta')
+    ->withoutOverlapping();

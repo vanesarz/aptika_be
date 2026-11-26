@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Magang;
 use App\Models\User;
+use App\Services\TaskManagement\NotificationService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,10 @@ use Throwable;
 
 class MagangController extends Controller
 {
+    public function __construct(private NotificationService $notificationService)
+    {
+    }
+
     /**
      * INDEX
      */
@@ -157,6 +162,7 @@ class MagangController extends Controller
 
         $magang = Magang::create($validated);
         $magang->load('bidang');
+        $this->notificationService->notifyMagangNewApplicant($magang);
 
         return response()->json([
             'success' => true,
@@ -436,6 +442,10 @@ class MagangController extends Controller
         });
 
         $warning = $magang->status_seleksi === 'diterima' ? $this->kirimPenerimaan($magang) : $this->kirimPenolakan($magang);
+        if ($magang->status_seleksi === 'diterima') {
+            $this->notificationService->notifyMagangMentorAssigned($magang, $request->user());
+        }
+
         return response()->json(['success' => true, 'data' => $magang, 'warning' => $warning]);
     }
 
@@ -569,7 +579,8 @@ class MagangController extends Controller
             'kampus_sudah_input' => 'prohibited',
             'catatan_penilaian' => 'prohibited',
         ]);
-        $magang = DB::transaction(function () use ($request, $id, $data) {
+        $gradeChanged = false;
+        $magang = DB::transaction(function () use ($request, $id, $data, &$gradeChanged) {
             $magang = Magang::whereKey($id)->lockForUpdate()->firstOrFail();
             abort_unless(! $request->user()->is_magang && $this->dapatMengaksesPenilaian($request->user(), $magang), 403);
             abort_unless($magang->status_seleksi === 'diterima', 422, 'Peserta belum diterima.');
@@ -611,11 +622,16 @@ class MagangController extends Controller
                 'format_penilaian' => $legacy ? $magang->format_penilaian : 'Format kampus peserta',
                 'dinilai_at' => now(),
             ]);
+            $gradeChanged = true;
             $magang->dokumens()->where('jenis', 'penilaian')->update(['status' => 'perlu_revisi']);
             $magang->dokumens()->firstOrCreate(['jenis' => 'selesai'], ['status' => 'diproses', 'dicatat_oleh' => $request->user()->id]);
 
             return $magang;
         });
+
+        if ($gradeChanged) {
+            $this->notificationService->notifyMagangRatingSubmitted($magang, $request->user());
+        }
 
         return response()->json(['success' => true, 'data' => $this->serializeMagang($magang)]);
     }
@@ -641,6 +657,8 @@ class MagangController extends Controller
 
             return $magang;
         });
+
+        $this->notificationService->notifyMagangCertificateFinalized($magang, $request->user());
 
         return response()->json(['success' => true, 'data' => $magang]);
     }
@@ -762,6 +780,7 @@ class MagangController extends Controller
             'link' => 'sometimes|nullable|url:http,https|max:2000',
             'panduan' => 'sometimes|nullable|string|max:10000',
             'dokumen' => 'nullable|file|mimes:pdf|max:10240',
+            'hapus_dokumen' => 'sometimes|boolean',
             'metode_bobot' => 'required_with:aspek_penilaian|in:sama,berbeda',
             'aspek_penilaian' => 'required_with:metode_bobot|array|list|min:1|max:30',
             'aspek_penilaian.*' => 'required|array:aspek,nilai_min,nilai_maks,bobot',
@@ -770,7 +789,9 @@ class MagangController extends Controller
             'aspek_penilaian.*.nilai_maks' => 'required|numeric',
             'aspek_penilaian.*.bobot' => 'required_if:metode_bobot,berbeda|prohibited_if:metode_bobot,sama|numeric|decimal:0,2|between:0,100',
         ]);
-        $updatesGuide = array_intersect(array_keys($data), ['link', 'panduan', 'dokumen']) !== [];
+        $hasGuideInput = array_intersect(array_keys($data), [
+            'link', 'panduan', 'dokumen', 'hapus_dokumen',
+        ]) !== [];
         if (isset($data['aspek_penilaian'])) {
             $totalWeight = 0;
             foreach ($data['aspek_penilaian'] as $row) {
@@ -784,20 +805,26 @@ class MagangController extends Controller
         }
 
         $oldPath = $newPath = null;
+        $guideChanged = false;
         try {
-            $magang = DB::transaction(function () use ($request, $id, $data, $updatesGuide, &$oldPath, &$newPath) {
+            $magang = DB::transaction(function () use ($request, $id, $data, $hasGuideInput, &$oldPath, &$newPath, &$guideChanged) {
                 $magang = Magang::whereKey($id)->where('user_id', $request->user()->id)->lockForUpdate()->firstOrFail();
                 abort_unless($magang->status_seleksi === 'diterima', 422, 'Peserta belum diterima.');
                 if (isset($data['kampus_perlu_input'])) {
+                    $guideChanged = $guideChanged || (bool) $magang->kampus_perlu_input !== (bool) $data['kampus_perlu_input'];
                     $this->setKewajibanKampus($magang, (bool) $data['kampus_perlu_input']);
                 }
-                abort_if($updatesGuide && ! $magang->kampus_perlu_input, 422, 'Aktifkan kewajiban pada sistem kampus untuk menyimpan tautan atau panduan.');
+                abort_if($hasGuideInput && ! $magang->kampus_perlu_input, 422, 'Aktifkan kewajiban pada sistem kampus untuk menyimpan tautan atau panduan.');
                 if (isset($data['aspek_penilaian'])) {
                     abort_if($magang->dinilai_at || $magang->disahkan_at, 422, 'Aspek penilaian dikunci setelah nilai disimpan.');
                 }
 
                 $details = collect($data)->only(['link', 'panduan', 'metode_bobot', 'aspek_penilaian'])->all();
                 if ($details) {
+                    $existingDetails = $magang->kebutuhan_kampus ?? [];
+                    foreach ($details as $key => $value) {
+                        $guideChanged = $guideChanged || ($existingDetails[$key] ?? null) !== $value;
+                    }
                     $magang->kebutuhan_kampus = [...($magang->kebutuhan_kampus ?? []), ...$details];
                 }
                 if ($file = $request->file('dokumen')) {
@@ -807,6 +834,13 @@ class MagangController extends Controller
                     abort_unless($newPath, 500, 'Panduan penilaian belum dapat disimpan.');
                     $attachments['pedoman_kampus'] = ['path' => $newPath, 'nama' => $file->getClientOriginalName(), 'label' => 'Pedoman penilaian kampus'];
                     $magang->lampiran_pendaftaran = $attachments;
+                    $guideChanged = true;
+                } elseif ($data['hapus_dokumen'] ?? false) {
+                    $attachments = $magang->lampiran_pendaftaran ?? [];
+                    $oldPath = $attachments['pedoman_kampus']['path'] ?? null;
+                    unset($attachments['pedoman_kampus']);
+                    $magang->lampiran_pendaftaran = $attachments;
+                    $guideChanged = $guideChanged || (bool) $oldPath;
                 }
                 $magang->save();
 
@@ -820,6 +854,9 @@ class MagangController extends Controller
         }
         if ($oldPath) {
             Storage::disk('local')->delete($oldPath);
+        }
+        if ($guideChanged) {
+            $this->notificationService->notifyMagangCampusGuidanceChanged($magang, $request->user());
         }
 
         return response()->json(['success' => true, 'data' => $this->serializeMagang($magang)]);
